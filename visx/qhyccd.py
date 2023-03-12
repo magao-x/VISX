@@ -1,8 +1,12 @@
 #!/bin/python3
+# Descended from code in https://github.com/JiangXL/qhyccd-python (GPLv3)
+# authored by H.F <moyuejian@outlook.com>
 import ctypes
 import numpy as np
-import time
-from libqhy import *
+import logging
+from .libqhy import *
+
+log = logging.getLogger(__name__)
 
 TYPE_CHAR20 = ctypes.c_char * 20
 TYPE_CHAR32 = ctypes.c_char * 32
@@ -22,26 +26,29 @@ class QHYCCDSDK():
         ret = self._sdk.InitQHYCCDResource()
 
         self._number_of_cameras = self._sdk.ScanQHYCCD()
+        self._ids = []
+        for i in range(self._number_of_cameras):
+            self._ids.append( TYPE_CHAR32() )
+            self._sdk.GetQHYCCDId(ctypes.c_int(i), self._ids[-1])
+            log.debug("Cameras {:d} ID {:s}".format(i, self._ids[-1].value.decode('utf8')))
         
         self._camera_handles = {}
-        self._ids = []
         
     def __del__(self):
         '''
         '''
         # Go through all camera handles and close the ones that are open
         for cam_handle in self._camera_handles:
-            self._sdk.CloseQHYCCD(cam_handle)
-            
+            try:
+                self._sdk.CloseQHYCCD(cam_handle)
+            except Exception:
+                pass
         self._sdk.ReleaseQHYCCDResource()
     
-    def list_cameras(self):
+    def list_cameras(self) -> list:
         '''
         '''
-        for i in range(self._number_of_cameras):
-            self.ids.append( TYPE_CHAR32() )
-            self.sdk.GetQHYCCDId(ctypes.c_int(i), self.ids[-1])
-            print("Cameras {:d} ID {:s}".format(i, self.ids[-1].value))
+        return [_id.value for _id in self._ids]
             
     def open_camera(self, camera_id):
         '''
@@ -131,7 +138,7 @@ class QHYCCDSDK():
         self._sdk.SetQHYCCDParam(camera_handle, parameter, value)
     
     def get_parameter(self, camera_handle, parameter):
-        return self._sdk.GetQHYCCDParam(self.cam, CONTROL_ID.CONTROL_EXPOSURE)
+        return self._sdk.GetQHYCCDParam(camera_handle, parameter)
 
 class QHYCCDCamera():
     ''' A class that interface with the QHYCCD series of cameras.
@@ -143,34 +150,36 @@ class QHYCCDCamera():
         
         self._stream_mode = 0 # set default mode to stream mode, otherwise set 0 for single frame mode
         
-        self.bpp(new_bpp)
-        self.exposure_time(100.0)
-        self.gain(1.0)
+        self.bpp = new_bpp
+        self.exposure_time = 0.1
+        self.gain = 1.0
                 
         # Get Camera Parameters
         self._chip_info = self._sdk.get_chip_info(self._camera)
         self._width = self._chip_info['size'][0]
         self._height = self._chip_info['size'][1]
+        self._channels = ctypes.c_uint32(self._chip_info['channels'])
         
-        # Always cool to zero at startup.
-        self.target_temperature(0.0)
+        # Always cool to ten at startup.
+        self.target_temperature = 10.0
         
         # Set ROI and readout parameters
-        self._set_roi(0, 0, self._width, self._height)
+        self._roi_w, self._roi_h = ctypes.c_uint(self._width), ctypes.c_uint(self._height)
+        self.set_roi(0, 0, self._width, self._height)
         self._sdk.set_parameter(self._camera, CONTROL_ID.CONTROL_USBTRAFFIC, ctypes.c_double(50))
-        self._sdk.set_parameter(self._camera, CONTROL_ID.CONTROL_TRANSFERBIT, ctypes.c_double(self._bpp))
+        self._sdk.set_parameter(self._camera, CONTROL_ID.CONTROL_TRANSFERBIT, self._bpp)
 
     def cancel_exposure(self):
         pass
         
     @property
     def temperature(self):
-        self._temperature = self._sdk.set_parameter(self._camera, CONTROL_ID.CONTROL_CURTEMP)
+        self._temperature = self._sdk.get_parameter(self._camera, CONTROL_ID.CONTROL_CURTEMP)
         return self._temperature
     
     @property
     def target_temperature(self):
-        return self._target_temperature
+        return self._sdk.get_parameter(self._camera, CONTROL_ID.CONTROL_COOLER)
         
     @target_temperature.setter
     def target_temperature(self, new_temperature):
@@ -201,28 +210,30 @@ class QHYCCDCamera():
     #""" Set camera depth """
     @property
     def bpp(self):
-        return self._bpp
+        return self._bpp.value
     
     @bpp.setter
     def bpp(self, new_bpp):
-        self._bpp = new_bpp
-        self._sdk.set_parameter(self._camera, CONTROL_ID.CONTROL_TRANSFERBIT, ctypes.c_double(self._bpp))
+        self._bpp = ctypes.c_double(new_bpp)
+        self._sdk.set_parameter(self._camera, CONTROL_ID.CONTROL_TRANSFERBIT, self._bpp)
 
     #""" Set camera ROI """
     def set_roi(self, x0, y0, roi_w, roi_h):
+        self._roi_w = ctypes.c_uint(roi_w)
+        self._roi_h = ctypes.c_uint(roi_h)
         # update the image buffer
-        if self._bpp == 16:
+        if self._bpp.value == 16:
             self._imgdata = (ctypes.c_uint16 * roi_w * roi_h)()
-            self._sdk._sdk.SetQHYCCDResolution(self.cam, ctypes.c_unint(x0), ctypes.c_unint(y0), ctypes.c_uint(roi_w), ctypes.c_uint(roi_h))
+            self._sdk._sdk.SetQHYCCDResolution(self._camera, ctypes.c_uint(x0), ctypes.c_uint(y0), self._roi_w, self._roi_h)
         else: # 8 bit
             self._imgdata = (ctypes.c_uint8 * roi_w * roi_h)()
-            self._sdk._sdk.SetQHYCCDResolution(self.cam, ctypes.c_unint(x0), ctypes.c_unint(y0), ctypes.c_uint(roi_w), ctypes.c_uint(roi_h))
+            self._sdk._sdk.SetQHYCCDResolution(self._camera, ctypes.c_uint(x0), ctypes.c_uint(y0), self._roi_w, self._roi_h)
 
     def start_exposure(self):
-        ret = self._sdk.sdk.ExpQHYCCDSingleFrame(self._camera)
+        ret = self._sdk._sdk.ExpQHYCCDSingleFrame(self._camera)
         
     def remaining_time(self):
-        percentage_complete = self._sdk.sdk.GetQHYCCDExposureRemaining(self._camera) # This counts the completion rate in percentages
+        percentage_complete = self._sdk._sdk.GetQHYCCDExposureRemaining(self._camera) # This counts the completion rate in percentages
         remaining = (100.0 - percentage_complete)/100.0 * self.exposure_time
         return remaining
     
@@ -233,10 +244,10 @@ class QHYCCDCamera():
             return False
     
     def readout(self):
-        ret = self._sdk.sdk.GetQHYCCDSingleFrame(self._camera, ctypes.byref(self._roi_w), ctypes.byref(self._roi_h), ctypes.byref(self._bpp), ctypes.byref(self._channels), self._imgdata)
+        ret = self._sdk._sdk.GetQHYCCDSingleFrame(self._camera, ctypes.byref(self._roi_w), ctypes.byref(self._roi_h), ctypes.byref(self._bpp), ctypes.byref(self._channels), self._imgdata)
         return np.asarray(self._imgdata)
     
     def get_singleframe(self):
-        ret = self._sdk.sdk.ExpQHYCCDSingleFrame(self._camera)
-        ret = self._sdk.sdk.GetQHYCCDSingleFrame(self._camera, ctypes.byref(self._roi_w), ctypes.byref(self._roi_h), ctypes.byref(self._bpp), ctypes.byref(self._channels), self._imgdata)
+        ret = self._sdk._sdk.ExpQHYCCDSingleFrame(self._camera)
+        ret = self._sdk._sdk.GetQHYCCDSingleFrame(self._camera, ctypes.byref(self._roi_w), ctypes.byref(self._roi_h), ctypes.byref(self._bpp), ctypes.byref(self._channels), self._imgdata)
         return np.asarray(self._imgdata)

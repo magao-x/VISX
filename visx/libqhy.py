@@ -1,3 +1,5 @@
+# Descended from code in https://github.com/JiangXL/qhyccd-python (GPLv3)
+# authored by H.F <moyuejian@outlook.com>
 import ctypes
 
 """
@@ -83,7 +85,3 @@ class ERR:
     QHYCCD_SUCCESS       = 0
     QHYCCD_ERROR         = 0xFFFFFFFF
 
-    
-parameter_type = {
-    CONTROL
-}

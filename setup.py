@@ -19,7 +19,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "visxCtrl=visx.xapp:main",
+            "visxCtrl=visx.xapp:VisX.console_app",
         ],
     },
 )
