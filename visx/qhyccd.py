@@ -251,3 +251,13 @@ class QHYCCDCamera():
         ret = self._sdk._sdk.ExpQHYCCDSingleFrame(self._camera)
         ret = self._sdk._sdk.GetQHYCCDSingleFrame(self._camera, ctypes.byref(self._roi_w), ctypes.byref(self._roi_h), ctypes.byref(self._bpp), ctypes.byref(self._channels), self._imgdata)
         return np.asarray(self._imgdata)
+
+    @property
+    def read_mode(self):
+        return self._read_mode
+    
+    @read_mode.setter
+    def set_readout_modes(self, new_read_mode):
+        if new_read_mode == 0 or new_read_mode == 1:
+            self._read_mode = new_read_mode
+            self._sdk.sdk.SetQHYCCDReadMode(self._camera, ctypes.c_uint32(self._read_mode))
